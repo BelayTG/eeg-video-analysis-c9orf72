@@ -311,12 +311,19 @@ def process_timepoint(tp, inventory):
         print(f"  No files for {tp}")
         return pd.DataFrame()
 
+    # Build session_id lookup from Scenario B
+    inv_B = inventory[(inventory.timepoint==tp) &
+                      (inventory.scenario=="B")].copy()
+    abf_to_session = dict(zip(inv_B["abf_path"].astype(str),
+                               inv_B["session_id"].astype(str)))
+
     rows = []
     for _, file_row in inv.iterrows():
         abf_path  = file_row["abf_path"]
         animal_id = str(file_row["animal_id"])
         group     = file_row["group"]
         abf_file  = file_row["abf_file"]
+        session_id = abf_to_session.get(str(abf_path), f"{animal_id}1")
 
         if not os.path.exists(abf_path):
             continue
@@ -325,6 +332,7 @@ def process_timepoint(tp, inventory):
         res = compute_dual_channel(abf_path, animal_id, group, tp, abf_file)
 
         if res:
+            res["session_id"] = session_id
             rows.append(res)
             dsi2 = res.get("dsi_2_alpha_beta", np.nan)
             ctx_beta = res.get("ctx_rbp_beta", np.nan)
@@ -337,6 +345,13 @@ def process_timepoint(tp, inventory):
         return pd.DataFrame()
 
     df = pd.DataFrame(rows)
+
+    # For 4m Scenario B: duplicate into session 2 (mirrors scripts 04/05)
+    if tp == "4m":
+        df2 = df.copy()
+        df2["session_id"] = df2["animal_id"] + "2"
+        df = pd.concat([df, df2], ignore_index=True)
+
     out = os.path.join(RESULTS_DIR, f"circuit_dissociation_{tp}.csv")
     df.to_csv(out, index=False)
     print(f"\n  Saved: {out} ({len(df)} rows)")
@@ -347,10 +362,9 @@ def process_timepoint(tp, inventory):
 
 def run_dissociation_stats(all_dfs):
     """
-    For each DSI formulation × timepoint:
-    1. WT vs KO comparison (does KO show more dissociation?)
-    2. Within KO: does DSI increase with timepoint? (Spearman vs TP_X)
-    3. CTX vs CA3 within group (does CTX hyperexcite while CA3 stays stable?)
+    Run statistics for BOTH scenarios:
+    Scenario A: unit = animal_id (n = animals)
+    Scenario B: unit = session_id (n = 2 × animals)
     """
     dsi_cols = ["dsi_1_beta", "dsi_2_alpha_beta", "dsi_3_euclidean",
                 "dsi_4_decorrelation", "ap_exp_dissociation"]
@@ -361,147 +375,156 @@ def run_dissociation_stats(all_dfs):
 
     all_rows = []
 
-    print(f"\n{'='*60}")
-    print("CIRCUIT DISSOCIATION STATISTICS")
-    print(f"{'='*60}")
+    for scenario, unit_col in [("A", "animal_id"), ("B", "session_id")]:
+        print(f"\n{'='*60}")
+        print(f"CIRCUIT DISSOCIATION STATISTICS — Scenario {scenario} ({unit_col})")
+        print(f"{'='*60}")
 
-    # ── 1. WT vs KO DSI per timepoint ─────────────────────────────────
-    print("\n--- DSI: KO vs WT ---")
-    for tp in TP_ORDER:
-        if tp not in all_dfs or all_dfs[tp].empty:
-            continue
-        df = all_dfs[tp]
-        am = df.groupby(["animal_id","group"])[dsi_cols + ratio_cols + region_cols].mean().reset_index()
-
-        for col in dsi_cols + ratio_cols:
-            if col not in am.columns:
-                continue
-            wt = am[am.group=="WT"][col].dropna().values
-            ko = am[am.group=="KO"][col].dropna().values
-            if len(wt) < 2 or len(ko) < 2:
-                continue
-            _, p = mannwhitneyu(wt, ko, alternative="two-sided")
-            d, d_lo, d_hi = cohens_d_ci(wt, ko)
-            ci_excl = (d_lo > 0) or (d_hi < 0)
-            all_rows.append({
-                "analysis":        "KO_vs_WT",
-                "feature":         col,
-                "timepoint":       tp,
-                "wt_mean":         round(float(np.mean(wt)),6),
-                "ko_mean":         round(float(np.mean(ko)),6),
-                "cohens_d":        round(d,4),
-                "d_ci_lo":         round(d_lo,4),
-                "d_ci_hi":         round(d_hi,4),
-                "ci_excludes_zero": ci_excl,
-                "pval":            round(p,6),
-                "n_wt":            len(wt),
-                "n_ko":            len(ko),
-            })
-            if p < 0.10 or ci_excl:
-                print(f"  [{tp}] {col:<30} "
-                      f"WT={np.mean(wt):.4f} KO={np.mean(ko):.4f} "
-                      f"d={d:.3f} [{d_lo:.3f},{d_hi:.3f}] p={p:.5f}"
-                      f"{'  CI✓' if ci_excl else ''}")
-
-    # ── 2. DSI trajectory within KO (does it increase over time?) ─────
-    print("\n--- DSI trajectory within KO (Spearman vs age) ---")
-    for col in dsi_cols:
-        ko_vals, tp_vals = [], []
-        for tp, tp_x in zip(TP_ORDER, TP_X):
+        # ── 1. WT vs KO DSI per timepoint ─────────────────────────────
+        print(f"\n--- DSI: KO vs WT [{scenario}] ---")
+        for tp in TP_ORDER:
             if tp not in all_dfs or all_dfs[tp].empty:
                 continue
             df = all_dfs[tp]
-            am = df.groupby(["animal_id","group"])[col].mean().reset_index()
-            ko = am[am.group=="KO"][col].dropna().values
-            ko_vals.extend(ko)
-            tp_vals.extend([tp_x] * len(ko))
-        if len(ko_vals) < 5:
-            continue
-        r, p = spearmanr(tp_vals, ko_vals)
-        print(f"  {col:<30} KO trajectory: ρ={r:.3f} p={p:.5f}"
-              f"{'  ***' if p<0.001 else '  **' if p<0.01 else '  *' if p<0.05 else ''}")
-        all_rows.append({
-            "analysis": "KO_trajectory",
-            "feature": col, "timepoint": "all",
-            "cohens_d": r, "pval": p,
-            "wt_mean": np.nan, "ko_mean": np.nan,
-            "d_ci_lo": np.nan, "d_ci_hi": np.nan,
-            "ci_excludes_zero": False,
-            "n_wt": 0, "n_ko": len(ko_vals),
-        })
+            if unit_col not in df.columns:
+                continue
+            am = df.groupby([unit_col,"group"])[
+                dsi_cols + ratio_cols].mean().reset_index()
 
-    # ── 3. CTX vs CA3 within KO per timepoint ─────────────────────────
-    print("\n--- CTX vs CA3 within KO (paired) ---")
-    for tp in TP_ORDER:
-        if tp not in all_dfs or all_dfs[tp].empty:
-            continue
-        df = all_dfs[tp]
-        ko_df = df[df.group=="KO"]
-        am = ko_df.groupby("animal_id")[region_cols].mean().reset_index()
+            for col in dsi_cols + ratio_cols:
+                if col not in am.columns:
+                    continue
+                wt = am[am.group=="WT"][col].dropna().values
+                ko = am[am.group=="KO"][col].dropna().values
+                if len(wt) < 2 or len(ko) < 2:
+                    continue
+                _, p = mannwhitneyu(wt, ko, alternative="two-sided")
+                d, d_lo, d_hi = cohens_d_ci(wt, ko)
+                ci_excl = (d_lo > 0) or (d_hi < 0)
+                all_rows.append({
+                    "scenario":         scenario,
+                    "analysis":         "KO_vs_WT",
+                    "feature":          col,
+                    "timepoint":        tp,
+                    "wt_mean":          round(float(np.mean(wt)),6),
+                    "ko_mean":          round(float(np.mean(ko)),6),
+                    "cohens_d":         round(d,4),
+                    "d_ci_lo":          round(d_lo,4),
+                    "d_ci_hi":          round(d_hi,4),
+                    "ci_excludes_zero": ci_excl,
+                    "pval":             round(p,6),
+                    "n_wt":             len(wt),
+                    "n_ko":             len(ko),
+                })
+                if p < 0.10 or ci_excl:
+                    print(f"  [{tp}] {col:<30} "
+                          f"WT={np.mean(wt):.4f} KO={np.mean(ko):.4f} "
+                          f"d={d:.3f} [{d_lo:.3f},{d_hi:.3f}] "
+                          f"p={p:.5f} (n={len(wt)}/{len(ko)})"
+                          f"{'  CI✓' if ci_excl else ''}")
 
-        for b in BANDS:
-            ca3_col = f"ca3_rbp_{b}"
-            ctx_col = f"ctx_rbp_{b}"
-            if ca3_col not in am or ctx_col not in am:
+        # ── 2. DSI trajectory within KO ───────────────────────────────
+        print(f"\n--- DSI trajectory within KO [{scenario}] ---")
+        for col in dsi_cols:
+            ko_vals, tp_vals = [], []
+            for tp, tp_x in zip(TP_ORDER, TP_X):
+                if tp not in all_dfs or all_dfs[tp].empty:
+                    continue
+                df = all_dfs[tp]
+                if unit_col not in df.columns or col not in df.columns:
+                    continue
+                am = df.groupby([unit_col,"group"])[col].mean().reset_index()
+                ko = am[am.group=="KO"][col].dropna().values
+                ko_vals.extend(ko)
+                tp_vals.extend([tp_x] * len(ko))
+            if len(ko_vals) < 5:
                 continue
-            ca3 = am[ca3_col].dropna().values
-            ctx = am[ctx_col].dropna().values
-            n = min(len(ca3), len(ctx))
-            if n < 3:
-                continue
-            from scipy.stats import wilcoxon
-            try:
-                _, p = wilcoxon(ctx[:n], ca3[:n])
-            except Exception:
-                continue
-            diff = np.mean(ctx[:n]) - np.mean(ca3[:n])
-            if p < 0.10:
-                direction = "CTX>CA3" if diff > 0 else "CA3>CTX"
-                print(f"  [{tp}] KO {b}: CTX={np.mean(ctx[:n]):.4f} "
-                      f"CA3={np.mean(ca3[:n]):.4f} diff={diff:.4f} "
-                      f"p={p:.5f} [{direction}]")
+            r, p = spearmanr(tp_vals, ko_vals)
+            sig = "***" if p<0.001 else "**" if p<0.01 else "*" if p<0.05 else ""
+            print(f"  {col:<30} ρ={r:.3f} p={p:.5f} {sig}")
             all_rows.append({
-                "analysis": "CTX_vs_CA3_KO",
-                "feature": f"{b}_ctx_vs_ca3",
-                "timepoint": tp,
-                "wt_mean": float(np.mean(ca3[:n])),
-                "ko_mean": float(np.mean(ctx[:n])),
-                "cohens_d": diff,
+                "scenario": scenario, "analysis": "KO_trajectory",
+                "feature": col, "timepoint": "all",
+                "cohens_d": r, "pval": p,
+                "wt_mean": np.nan, "ko_mean": np.nan,
                 "d_ci_lo": np.nan, "d_ci_hi": np.nan,
                 "ci_excludes_zero": False,
-                "pval": round(p,6),
-                "n_wt": n, "n_ko": n,
+                "n_wt": 0, "n_ko": len(ko_vals),
             })
 
-    # Apply FDR to KO_vs_WT tests
+        # ── 3. CTX vs CA3 within KO ───────────────────────────────────
+        print(f"\n--- CTX vs CA3 within KO [{scenario}] ---")
+        for tp in TP_ORDER:
+            if tp not in all_dfs or all_dfs[tp].empty:
+                continue
+            df = all_dfs[tp]
+            ko_df = df[df.group=="KO"]
+            if unit_col not in ko_df.columns:
+                continue
+            am = ko_df.groupby(unit_col)[region_cols].mean().reset_index()
+
+            for b in BANDS:
+                ca3_col = f"ca3_rbp_{b}"
+                ctx_col = f"ctx_rbp_{b}"
+                if ca3_col not in am or ctx_col not in am:
+                    continue
+                ca3 = am[ca3_col].dropna().values
+                ctx = am[ctx_col].dropna().values
+                n = min(len(ca3), len(ctx))
+                if n < 3:
+                    continue
+                from scipy.stats import wilcoxon
+                try:
+                    _, p = wilcoxon(ctx[:n], ca3[:n])
+                except Exception:
+                    continue
+                diff = np.mean(ctx[:n]) - np.mean(ca3[:n])
+                if p < 0.05:
+                    direction = "CTX>CA3" if diff > 0 else "CA3>CTX"
+                    print(f"  [{tp}] {b}: CTX={np.mean(ctx[:n]):.4f} "
+                          f"CA3={np.mean(ca3[:n]):.4f} diff={diff:.4f} "
+                          f"p={p:.5f} [{direction}] (n={n})")
+                all_rows.append({
+                    "scenario": scenario, "analysis": "CTX_vs_CA3_KO",
+                    "feature": f"{b}_ctx_vs_ca3", "timepoint": tp,
+                    "wt_mean": float(np.mean(ca3[:n])),
+                    "ko_mean": float(np.mean(ctx[:n])),
+                    "cohens_d": diff,
+                    "d_ci_lo": np.nan, "d_ci_hi": np.nan,
+                    "ci_excludes_zero": False,
+                    "pval": round(p,6),
+                    "n_wt": n, "n_ko": n,
+                })
+
+    # Apply FDR to KO_vs_WT tests per scenario
     stats = pd.DataFrame(all_rows)
-    ko_wt_mask = stats.analysis == "KO_vs_WT"
-    if ko_wt_mask.sum() > 1:
-        stats.loc[ko_wt_mask, "pval_fdr"] = fdr_bh(
-            stats.loc[ko_wt_mask, "pval"].values).round(6)
-        stats.loc[ko_wt_mask, "fdr_sig"] = \
-            stats.loc[ko_wt_mask, "pval_fdr"] < 0.05
+    for sc in ["A","B"]:
+        mask = (stats.scenario==sc) & (stats.analysis=="KO_vs_WT")
+        if mask.sum() > 1:
+            stats.loc[mask, "pval_fdr"] = fdr_bh(
+                stats.loc[mask, "pval"].values).round(6)
+            stats.loc[mask, "fdr_sig"] = stats.loc[mask, "pval_fdr"] < 0.05
 
     stats.to_csv(os.path.join(RESULTS_DIR, "circuit_dissociation_stats.csv"),
                   index=False)
     print(f"\nSaved: circuit_dissociation_stats.csv ({len(stats)} rows)")
 
-    fdr_sig = stats[stats.get("fdr_sig", False) == True] \
-        if "fdr_sig" in stats.columns else pd.DataFrame()
-    ci_sig  = stats[(stats.analysis=="KO_vs_WT") & stats.ci_excludes_zero]
-
-    print(f"\nFDR significant (KO vs WT): {len(fdr_sig)}")
-    print(f"CI excludes zero (KO vs WT): {len(ci_sig)}")
-    if len(fdr_sig) > 0:
-        for _, r in fdr_sig.iterrows():
-            print(f"  *** [{r.timepoint}] {r.feature}: "
-                  f"d={r.cohens_d:.3f} p={r.pval:.5f} FDR={r.pval_fdr:.5f}")
-    if len(ci_sig) > 0:
-        for _, r in ci_sig.sort_values("pval").iterrows():
-            print(f"  ◄ [{r.timepoint}] {r.feature}: "
-                  f"WT={r.wt_mean:.4f} KO={r.ko_mean:.4f} "
-                  f"d={r.cohens_d:.3f} [{r.d_ci_lo:.3f},{r.d_ci_hi:.3f}] "
-                  f"p={r.pval:.5f}")
+    for sc in ["A","B"]:
+        sc_ko_wt = stats[(stats.scenario==sc) & (stats.analysis=="KO_vs_WT")]
+        fdr_sig = sc_ko_wt[sc_ko_wt.get("fdr_sig", False) == True] \
+            if "fdr_sig" in sc_ko_wt.columns else pd.DataFrame()
+        ci_sig  = sc_ko_wt[sc_ko_wt.ci_excludes_zero]
+        print(f"\nScenario {sc}: FDR sig={len(fdr_sig)} | CI excl. zero={len(ci_sig)}")
+        if len(fdr_sig) > 0:
+            for _, r in fdr_sig.iterrows():
+                print(f"  *** [{r.timepoint}] {r.feature}: "
+                      f"d={r.cohens_d:.3f} p={r.pval:.5f} FDR={r.pval_fdr:.5f}")
+        if len(ci_sig) > 0:
+            for _, r in ci_sig.sort_values("pval").iterrows():
+                print(f"  ◄ [{r.timepoint}] {r.feature}: "
+                      f"WT={r.wt_mean:.4f} KO={r.ko_mean:.4f} "
+                      f"d={r.cohens_d:.3f} [{r.d_ci_lo:.3f},{r.d_ci_hi:.3f}] "
+                      f"p={r.pval:.5f}")
 
     return stats
 
@@ -832,13 +855,27 @@ def main():
     all_dfs = {}
 
     for tp in tp_to_run:
-        # Check if already processed
         path = os.path.join(RESULTS_DIR, f"circuit_dissociation_{tp}.csv")
         if os.path.exists(path):
             df = pd.read_csv(path)
             df["animal_id"] = df["animal_id"].astype(str)
+            # Rebuild session_id if missing
+            if "session_id" not in df.columns:
+                inv_B = inventory[(inventory.timepoint==tp) &
+                                   (inventory.scenario=="B")].copy()
+                abf_to_session = dict(zip(inv_B["abf_path"].astype(str),
+                                           inv_B["session_id"].astype(str)))
+                df["session_id"] = df.apply(
+                    lambda r: abf_to_session.get(
+                        str(r.get("abf_path","")), f"{r['animal_id']}1"), axis=1)
+                if tp == "4m" and len(df[df.session_id.str.endswith("2")]) == 0:
+                    df2 = df.copy()
+                    df2["session_id"] = df2["animal_id"] + "2"
+                    df = pd.concat([df, df2], ignore_index=True)
+                df.to_csv(path, index=False)
             all_dfs[tp] = df
-            print(f"  Loaded {tp}: {len(df)} rows")
+            print(f"  Loaded {tp}: {len(df)} rows "
+                  f"(sessions: {df['session_id'].nunique() if 'session_id' in df.columns else 'N/A'})")
         else:
             if tp not in inventory["timepoint"].unique():
                 continue
