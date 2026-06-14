@@ -117,12 +117,14 @@ def get_scenario_df(raw_df, feat_cols, scenario="A"):
     Aggregate the per-file table to the correct statistical unit level.
     unit_id is already set by load_all_timepoints(); we just group by it.
     """
-    feat_cols = [c for c in feat_cols if c in raw_df.columns]
     if "unit_id" not in raw_df.columns:
         raw_df = raw_df.copy()
         raw_df["unit_id"] = raw_df["animal_id"] if scenario == "A" else raw_df.get("session_id", raw_df["animal_id"])
     grp_cols = ["unit_id", "animal_id", "group", "timepoint"]
     grp_cols = [c for c in grp_cols if c in raw_df.columns]
+    # Keep only numeric feature columns that exist in the dataframe
+    numeric_cols = raw_df.select_dtypes(include=[np.number]).columns.tolist()
+    feat_cols = [c for c in feat_cols if c in raw_df.columns and c in numeric_cols]
     grp = raw_df.groupby(grp_cols)[feat_cols].mean().reset_index()
     return grp
 
@@ -242,7 +244,7 @@ def plot_trajectory(animal_df, feat, title, ylabel, fname, log_scale=False):
     print(f"  Saved: {fname}")
 
 
-def plot_effect_size_heatmap(traj_df, top_n=20):
+def plot_effect_size_heatmap(traj_df, top_n=20, suffix=""):
     """
     Heatmap: features (rows) × timepoints (cols), colored by Cohen's d.
     Shows top N features by max |d| across timepoints.
@@ -283,13 +285,13 @@ def plot_effect_size_heatmap(traj_df, top_n=20):
     ax.set_title(f"EEG Feature Effect Size (Cohen's d) — Top {top_n} Features\n"
                  "Positive = KO > WT | * p<0.05 ** p<0.01 *** p<0.001", fontsize=10)
     plt.tight_layout()
-    fig.savefig(os.path.join(FIGURES_DIR, "longitudinal_effect_size_heatmap.png"),
+    fig.savefig(os.path.join(FIGURES_DIR, f"longitudinal_effect_size_heatmap_{suffix}.png"),
                 dpi=300, bbox_inches="tight")
     plt.close()
-    print("  Saved: longitudinal_effect_size_heatmap.png")
+    print(f"  Saved: longitudinal_effect_size_heatmap_{suffix}.png")
 
 
-def plot_pca_trajectory(animal_df, feat_cols):
+def plot_pca_trajectory(animal_df, feat_cols, suffix="scenA"):
     """
     PCA of all features per animal × timepoint.
     Color by group, marker by timepoint.
@@ -348,10 +350,10 @@ def plot_pca_trajectory(animal_df, feat_cols):
                           label="KO")]
     ax.legend(handles=handles, fontsize=9)
     plt.tight_layout()
-    fig.savefig(os.path.join(FIGURES_DIR, "longitudinal_pca_trajectory.png"),
+    fig.savefig(os.path.join(FIGURES_DIR, f"longitudinal_pca_trajectory_{suffix}.png"),
                 dpi=300, bbox_inches="tight")
     plt.close()
-    print("  Saved: longitudinal_pca_trajectory.png")
+    print(f"  Saved: longitudinal_pca_trajectory_{suffix}.png")
 
 
 def plot_sleep_architecture_longitudinal(sleep_df):
@@ -456,12 +458,14 @@ def main():
     sleep_df = load_sleep_summaries()
 
     # Feature columns (exclude metadata, n_epochs, std columns)
-    meta = {"animal_id", "session_id", "group", "timepoint", "abf_file",
+    meta = {"animal_id", "session_id", "unit_id", "group", "timepoint", "abf_file",
             "n_epochs_total", "pct_wake", "pct_nrem", "pct_rem"}
     feat_cols = [c for c in raw_df.columns
                  if c not in meta
                  and not c.endswith("_n_epochs")
-                 and not c.endswith("_std")]
+                 and not c.endswith("_std")
+                 and not c.endswith("_pct")
+                 and raw_df[c].dtype in [np.float64, np.float32, np.int64, np.int32]]
     print(f"\nFeature columns: {len(feat_cols)}")
 
     # ── Aggregate to both scenarios ───────────────────────────────────────
@@ -501,11 +505,29 @@ def main():
 
     # ── 2. Scenario comparison — do conclusions differ? ───────────────────
     print("\n=== SCENARIO A vs B COMPARISON ===")
-    print_scenario_comparison(
-        traj_A.rename(columns={"pval":"pval","cohens_d":"cohens_d","sig":"sig"}),
-        traj_B.rename(columns={"pval":"pval","cohens_d":"cohens_d","sig":"sig"}),
-        top_n=20
+    sig_A = set(zip(traj_A[traj_A.pval < 0.05].feature,
+                    traj_A[traj_A.pval < 0.05].timepoint))
+    sig_B = set(zip(traj_B[traj_B.pval < 0.05].feature,
+                    traj_B[traj_B.pval < 0.05].timepoint))
+    both  = sig_A & sig_B
+    only_A = sig_A - sig_B
+    only_B = sig_B - sig_A
+    print(f"  Significant in BOTH scenarios:      {len(both)}")
+    print(f"  Significant in Scenario A only:     {len(only_A)}")
+    print(f"  Significant in Scenario B only:     {len(only_B)}")
+    if only_A:
+        print(f"  A-only findings: {sorted(only_A)[:10]}")
+    if only_B:
+        print(f"  B-only findings (higher power): {sorted(only_B)[:10]}")
+    # Save comparison table
+    merged_traj = traj_A.merge(
+        traj_B[["feature","timepoint","cohens_d","pval","sig"]],
+        on=["feature","timepoint"], suffixes=("_A","_B"), how="outer"
     )
+    merged_traj.to_csv(
+        os.path.join(RESULTS_DIR, "longitudinal_scenAB_comparison.csv"),
+        index=False)
+    print(f"  Saved: longitudinal_scenAB_comparison.csv")
 
     # ── 3. Key feature trajectories (use Scenario A for figures) ──────────
     print("\n=== PLOTTING KEY FEATURE TRAJECTORIES (Scenario A) ===")
