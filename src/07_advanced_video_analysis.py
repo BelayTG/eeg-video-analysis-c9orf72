@@ -249,7 +249,7 @@ def detect_seizure_events(times, scores, bouts_df, min_dur_s=SEIZURE_DURATION_S)
 
 # ── Stage 5: EEG-video merge ───────────────────────────────────────────────
 
-def merge_eeg_video(eeg_epochs_path, video_epochs_df, session_id, abf_file):
+def merge_eeg_video(eeg_epochs_path, video_epochs_df, animal_id, abf_file):
     """
     Merge epoch-level EEG features with video movement features.
     Matching is on epoch_idx.
@@ -258,7 +258,9 @@ def merge_eeg_video(eeg_epochs_path, video_epochs_df, session_id, abf_file):
         return pd.DataFrame()
 
     eeg = pd.read_csv(eeg_epochs_path)
-    eeg = eeg[(eeg.session_id.astype(str) == str(session_id)) &
+    # Handle both old (session_id) and new (session_id_A) column names
+    sid_col = "session_id_A" if "session_id_A" in eeg.columns else "session_id"
+    eeg = eeg[(eeg[sid_col].astype(str) == str(animal_id)) &
                (eeg.abf_file == abf_file)].copy()
     if eeg.empty:
         return pd.DataFrame()
@@ -351,7 +353,7 @@ def process_timepoint(tp, inventory_all, use_optical_flow=False):
             # EEG-video merge
             if os.path.exists(eeg_epoch_path):
                 merged = merge_eeg_video(eeg_epoch_path, vid_epochs,
-                                          session_id, abf_file)
+                                          animal_id, abf_file)
                 if not merged.empty:
                     all_merged_rows.append(merged)
 
