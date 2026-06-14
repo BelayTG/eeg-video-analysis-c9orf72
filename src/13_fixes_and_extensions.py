@@ -881,8 +881,8 @@ def main():
 
     # Fix 1: PAC full signal (reprocesses ABF files — slow)
     # Uncomment to run:
-    # if not inventory.empty:
-    #     run_fix1_pac(inventory)
+    if not inventory.empty:
+        run_fix1_pac(inventory)
 
     # Fix 2: DSI WT trajectory + slope difference (fast — uses existing CSV)
     run_fix2_dsi_wt_trajectory()
