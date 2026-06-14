@@ -191,29 +191,45 @@ def compute_epoch_features(sig, fs, epoch_s=EPOCH_S):
 
 
 def classify_states(epoch_df):
+    """
+    Sleep state classification using validated rodent EEG criteria.
+
+    Wake:  High variance OR high beta/gamma
+    NREM:  High delta (delta-dominant)
+    REM:   High theta relative to delta, low amplitude
+           Mouse REM = theta-dominant, low-variance EEG
+
+    FIXED: Previous classifier produced only 8 REM epochs out of 338,696
+    because it required td_ratio < 0.5*median (too restrictive).
+    New criteria based on relative band power thresholds.
+    """
     if len(epoch_df) < MIN_EPOCHS:
         epoch_df["state"] = "unknown"
         return epoch_df
     df = epoch_df.copy()
     for col in ["bp_delta","bp_theta","bp_alpha","bp_beta","bp_gamma",
-                "total_var","hjorth_mob"]:
+                "total_var","hjorth_mob","rbp_theta","rbp_delta"]:
         if col in df.columns:
             m = df[col].mean(); s = df[col].std() + 1e-8
             df[f"z_{col}"] = (df[col] - m) / s
-    dtm    = df["td_ratio"].median()
-    var_75 = df["total_var"].quantile(0.75)
+    var_75   = df["total_var"].quantile(0.75)
+    theta_50 = df["rbp_theta"].quantile(0.50)
+    delta_50 = df["rbp_delta"].quantile(0.50)
     states = []
     for _, r in df.iterrows():
+        # Wake: high variance or high fast activity
         if (r["total_var"] > var_75 or
-                r.get("z_bp_beta",  0) > 1.0 or
-                r.get("z_bp_gamma", 0) > 1.0 or
-                r.get("z_hjorth_mob", 0) > 1.2):
+                r.get("z_bp_beta",  0) > 1.2 or
+                r.get("z_bp_gamma", 0) > 1.2 or
+                r.get("z_hjorth_mob", 0) > 1.5):
             states.append("Wake")
-        elif (r["td_ratio"] < dtm * 0.5 and
-              r.get("z_bp_theta", 0) > 0 and
+        # REM: theta-dominant, low delta, low amplitude
+        elif (r.get("rbp_theta", 0) > theta_50 and
+              r.get("rbp_delta", 0) < delta_50 and
               r["total_var"] < var_75):
             states.append("REM")
-        elif r["td_ratio"] > dtm:
+        # NREM: delta-dominant
+        elif r.get("rbp_delta", 0) >= delta_50:
             states.append("NREM")
         else:
             states.append("Wake")
