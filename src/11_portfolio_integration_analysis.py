@@ -317,23 +317,35 @@ def process_timepoint(tp, inventory):
     print(f"Portfolio Integration — {tp}")
     print(f"{'='*60}")
 
-    inv = inventory[(inventory.timepoint==tp) &
-                    (inventory.scenario=="A")].drop_duplicates(
+    # Get unique ABF files (avoid processing duplicates from Scenario B)
+    inv = inventory[(inventory.timepoint==tp)].drop_duplicates(
                         subset=["abf_path"]).copy()
     if len(inv) == 0:
         print(f"  No files for {tp}")
         return pd.DataFrame()
+
+    # Build session_id lookup from Scenario B inventory
+    inv_B = inventory[(inventory.timepoint==tp) &
+                      (inventory.scenario=="B")].copy()
+    # Map abf_path → session_id for Scenario B
+    abf_to_session = dict(zip(inv_B["abf_path"].astype(str),
+                               inv_B["session_id"].astype(str)))
 
     rows = []
     for _, file_row in inv.iterrows():
         abf_path  = file_row["abf_path"]
         animal_id = str(file_row["animal_id"])
         group     = file_row["group"]
+        abf_file  = file_row["abf_file"]
+        # Get session_id for this file (Scenario B)
+        session_id = abf_to_session.get(str(abf_path), f"{animal_id}1")
+
         if not os.path.exists(abf_path):
             continue
-        print(f"  {animal_id} | {file_row['abf_file'][:25]}", end="", flush=True)
+        print(f"  {animal_id} | {abf_file[:25]}", end="", flush=True)
         res = compute_portfolio_features(abf_path, animal_id, group, tp)
         if res:
+            res["session_id"] = session_id
             rows.append(res)
             print(f" ap={res.get('ap_exp_robust',np.nan):.2f} "
                   f"pe={res.get('peen',np.nan):.3f} "
@@ -345,6 +357,14 @@ def process_timepoint(tp, inventory):
         return pd.DataFrame()
 
     df = pd.DataFrame(rows)
+
+    # For 4m Scenario B: duplicate rows with session_id ending in 2
+    # (mirrors the duplication logic in scripts 04/05)
+    if tp == "4m":
+        df2 = df.copy()
+        df2["session_id"] = df2["animal_id"] + "2"
+        df = pd.concat([df, df2], ignore_index=True)
+
     df.to_csv(os.path.join(RESULTS_DIR, f"portfolio_integration_{tp}.csv"),
                index=False)
     print(f"\n  Saved: portfolio_integration_{tp}.csv ({len(df)} rows)")
@@ -354,71 +374,87 @@ def process_timepoint(tp, inventory):
 # ── Statistics across all timepoints ─────────────────────────────────────
 
 def run_statistics_all(all_dfs):
-    """Animal-level Mann-Whitney U for all portfolio features across timepoints."""
+    """
+    Run statistics for BOTH scenarios:
+    Scenario A: group by animal_id (n = animals)
+    Scenario B: group by session_id (n = sessions = 2 × animals)
+    """
     feat_cols = ["ap_exp_robust", "peen", "pac_theta_gamma",
                  "pac_alpha_gamma", "pac_delta_gamma",
                  "wpli_theta", "wpli_alpha", "wpli_beta", "wpli_gamma"]
 
-    rows = []
-    print(f"\n{'='*60}")
-    print("PORTFOLIO INTEGRATION STATISTICS")
-    print(f"{'='*60}")
+    all_rows = []
 
-    for tp in TP_ORDER:
-        if tp not in all_dfs or all_dfs[tp].empty:
-            continue
-        df = all_dfs[tp]
-        # Animal-level means
-        am = df.groupby(["animal_id","group"])[feat_cols].mean().reset_index()
+    for scenario, unit_col in [("A", "animal_id"), ("B", "session_id")]:
+        rows = []
+        print(f"\n{'='*60}")
+        print(f"STATISTICS — Scenario {scenario} (unit: {unit_col})")
+        print(f"{'='*60}")
 
-        for feat in feat_cols:
-            if feat not in am.columns:
+        for tp in TP_ORDER:
+            if tp not in all_dfs or all_dfs[tp].empty:
                 continue
-            wt = am[am.group=="WT"][feat].dropna().values
-            ko = am[am.group=="KO"][feat].dropna().values
-            if len(wt) < 2 or len(ko) < 2:
+            df = all_dfs[tp]
+
+            if unit_col not in df.columns:
                 continue
-            _, p = mannwhitneyu(wt, ko, alternative="two-sided")
-            d, d_lo, d_hi = cohens_d_ci(wt, ko)
-            ci_excl = (d_lo > 0) or (d_hi < 0)
-            rows.append({
-                "feature":         feat,
-                "timepoint":       tp,
-                "wt_mean":         round(float(np.mean(wt)),6),
-                "ko_mean":         round(float(np.mean(ko)),6),
-                "cohens_d":        round(d,4),
-                "d_ci_lo":         round(d_lo,4),
-                "d_ci_hi":         round(d_hi,4),
-                "ci_excludes_zero": ci_excl,
-                "pval":            round(p,6),
-                "n_wt":            len(wt),
-                "n_ko":            len(ko),
-            })
 
-            if p < 0.10 or ci_excl:
-                print(f"  [{tp}] {feat:<25} WT={np.mean(wt):.4f} KO={np.mean(ko):.4f} "
-                      f"d={d:.3f} [{d_lo:.3f},{d_hi:.3f}] p={p:.5f}"
-                      f"{'  CI✓' if ci_excl else ''}")
+            # Average features within unit
+            am = df.groupby([unit_col, "group"])[feat_cols].mean().reset_index()
 
-    stats = pd.DataFrame(rows)
-    if len(stats) > 1:
-        stats["pval_fdr"] = fdr_bh(stats["pval"].values).round(6)
-        stats["fdr_sig"]  = stats["pval_fdr"] < 0.05
+            for feat in feat_cols:
+                if feat not in am.columns:
+                    continue
+                wt = am[am.group=="WT"][feat].dropna().values
+                ko = am[am.group=="KO"][feat].dropna().values
+                if len(wt) < 2 or len(ko) < 2:
+                    continue
+                _, p = mannwhitneyu(wt, ko, alternative="two-sided")
+                d, d_lo, d_hi = cohens_d_ci(wt, ko)
+                ci_excl = (d_lo > 0) or (d_hi < 0)
+                rows.append({
+                    "scenario":        scenario,
+                    "feature":         feat,
+                    "timepoint":       tp,
+                    "wt_mean":         round(float(np.mean(wt)),6),
+                    "ko_mean":         round(float(np.mean(ko)),6),
+                    "cohens_d":        round(d,4),
+                    "d_ci_lo":         round(d_lo,4),
+                    "d_ci_hi":         round(d_hi,4),
+                    "ci_excludes_zero": ci_excl,
+                    "pval":            round(p,6),
+                    "n_wt":            len(wt),
+                    "n_ko":            len(ko),
+                })
 
+                if p < 0.10 or ci_excl:
+                    print(f"  [{tp}] {feat:<25} "
+                          f"WT={np.mean(wt):.4f} KO={np.mean(ko):.4f} "
+                          f"d={d:.3f} [{d_lo:.3f},{d_hi:.3f}] "
+                          f"p={p:.5f} (n_wt={len(wt)}, n_ko={len(ko)})"
+                          f"{'  CI✓' if ci_excl else ''}")
+
+        # FDR within scenario
+        if rows:
+            sc_df = pd.DataFrame(rows)
+            sc_df["pval_fdr"] = fdr_bh(sc_df["pval"].values).round(6)
+            sc_df["fdr_sig"]  = sc_df["pval_fdr"] < 0.05
+            all_rows.append(sc_df)
+
+            fdr_sig = sc_df[sc_df.fdr_sig]
+            ci_sig  = sc_df[sc_df.ci_excludes_zero]
+            print(f"\n  Scenario {scenario}: FDR sig={len(fdr_sig)} | "
+                  f"CI excl. zero={len(ci_sig)}")
+            if len(fdr_sig) > 0:
+                for _, r in fdr_sig.iterrows():
+                    print(f"  *** [{r.timepoint}] {r.feature}: "
+                          f"d={r.cohens_d:.3f} p={r.pval:.5f} "
+                          f"FDR={r.pval_fdr:.5f}")
+
+    stats = pd.concat(all_rows, ignore_index=True) if all_rows else pd.DataFrame()
     stats.to_csv(os.path.join(RESULTS_DIR, "portfolio_integration_stats.csv"),
                   index=False)
     print(f"\nSaved: portfolio_integration_stats.csv ({len(stats)} rows)")
-
-    fdr_sig = stats[stats.get("fdr_sig", False) == True] if "fdr_sig" in stats else pd.DataFrame()
-    ci_sig  = stats[stats.ci_excludes_zero & ~stats.get("fdr_sig", False)] if "fdr_sig" in stats else stats[stats.ci_excludes_zero]
-
-    print(f"\nFDR significant: {len(fdr_sig)}")
-    print(f"CI excludes zero: {len(ci_sig) + len(fdr_sig)}")
-    if len(fdr_sig) > 0:
-        for _, r in fdr_sig.iterrows():
-            print(f"  *** [{r.timepoint}] {r.feature}: d={r.cohens_d:.3f} "
-                  f"p={r.pval:.5f} FDR={r.pval_fdr:.5f}")
-
     return stats
 
 
@@ -659,11 +695,10 @@ def plot_portfolio_trajectories(all_dfs, stats_df):
 
 def main():
     print("=" * 60)
-    print("PORTFOLIO INTEGRATION ANALYSIS")
-    print("Adding: FOOOF 1/f, PeEn, PAC, wPLI, Recovery Index, Predictive")
+    print("PORTFOLIO INTEGRATION ANALYSIS — DUAL SCENARIO")
+    print("Scenario A: n = animals | Scenario B: n = sessions")
     print("=" * 60)
 
-    # Load inventory
     inv_path = os.path.join(DATA_DIR, "file_inventory_all_timepoints.csv")
     if not os.path.exists(inv_path):
         print("ERROR: Run script 04 first")
@@ -671,18 +706,42 @@ def main():
     inventory = pd.read_csv(inv_path)
     inventory["animal_id"] = inventory["animal_id"].astype(str)
 
-    # Process each timepoint
+    # Load existing processed files if available, otherwise reprocess
     all_dfs = {}
     for tp in TP_ORDER:
-        df = process_timepoint(tp, inventory)
-        if not df.empty:
+        path = os.path.join(RESULTS_DIR, f"portfolio_integration_{tp}.csv")
+        if os.path.exists(path):
+            df = pd.read_csv(path)
+            df["animal_id"] = df["animal_id"].astype(str)
+            # Ensure session_id exists
+            if "session_id" not in df.columns:
+                # Rebuild session_id from inventory
+                inv_B = inventory[(inventory.timepoint==tp) &
+                                   (inventory.scenario=="B")].copy()
+                abf_to_session = dict(zip(inv_B["abf_path"].astype(str),
+                                           inv_B["session_id"].astype(str)))
+                df["session_id"] = df.apply(
+                    lambda r: abf_to_session.get(str(r.get("abf_path","")),
+                                                  f"{r['animal_id']}1"), axis=1)
+                # 4m duplication
+                if tp == "4m":
+                    df2 = df.copy()
+                    df2["session_id"] = df2["animal_id"] + "2"
+                    df = pd.concat([df, df2], ignore_index=True)
+                df.to_csv(path, index=False)
             all_dfs[tp] = df
+            print(f"  Loaded {tp}: {len(df)} rows")
+        else:
+            print(f"  Processing {tp} from scratch...")
+            df = process_timepoint(tp, inventory)
+            if not df.empty:
+                all_dfs[tp] = df
 
     if not all_dfs:
-        print("No data processed")
+        print("No data available")
         return
 
-    # Statistics
+    # Statistics — both scenarios
     stats_df = run_statistics_all(all_dfs)
 
     # Recovery index
