@@ -455,7 +455,9 @@ def process_timepoint(tp, inventory_all):
 
         ep_sub = None
         if eeg_epochs is not None:
-            mask = ((eeg_epochs.session_id.astype(str) == session_id) &
+            # epochs file uses session_id_A and session_id_B columns
+            sid_col = "session_id_A" if "session_id_A" in eeg_epochs.columns else "session_id"
+            mask = ((eeg_epochs[sid_col].astype(str) == str(animal_id)) &
                     (eeg_epochs.abf_file == abf_file))
             ep_sub = eeg_epochs[mask]
 
