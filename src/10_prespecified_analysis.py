@@ -69,18 +69,25 @@ TP_SECONDARY = ["6m", "7m"]
 # ── Primary features ───────────────────────────────────────────────────────
 PRIMARY_FEATURES = [
     {
-        "name":      "nrem_td_ratio",
-        "label":     "NREM Theta/Delta Ratio",
+        "name":      "rem_td_ratio",
+        "label":     "REM Theta/Delta Ratio",
         "source":    "band_power",
-        "rationale": "Established ALS EEG biomarker; fast-frequency failure",
+        "rationale": "REM hyperexcitability; Scekic-Zahirovic PAC state; E/I balance during REM",
         "direction": "+",   # KO > WT expected
     },
     {
-        "name":      "nrem_rbp_theta",
-        "label":     "NREM Relative Theta Power",
+        "name":      "rem_rbp_theta",
+        "label":     "REM Relative Theta Power",
         "source":    "band_power",
-        "rationale": "Slow oscillation dominance; progressive network collapse",
+        "rationale": "REM theta dominance; progressive slow-wave invasion of REM",
         "direction": "+",
+    },
+    {
+        "name":      "wake_rbp_beta",
+        "label":     "Wake Relative Beta Power",
+        "source":    "band_power",
+        "rationale": "Corticospinal excitability; biphasic hyper→hypo transition",
+        "direction": "±",   # + at 4m, - at 12m
     },
     {
         "name":      "spindle_duration_mean",
@@ -90,16 +97,30 @@ PRIMARY_FEATURES = [
         "direction": "-",   # KO < WT expected
     },
     {
-        "name":      "wake_rbp_beta",
-        "label":     "Wake Relative Beta Power",
+        "name":      "rem_rbp_beta",
+        "label":     "REM Relative Beta Power",
         "source":    "band_power",
-        "rationale": "Corticospinal excitability; biphasic hyper→hypo transition",
-        "direction": "±",   # + at 4m, - at 12m
+        "rationale": "REM beta sign-flip; hyperexcitability (4m) → hypoexcitability (12m)",
+        "direction": "±",
     },
 ]
 
 # Secondary features reported separately
 SECONDARY_FEATURES = [
+    {
+        "name":      "nrem_td_ratio",
+        "label":     "NREM Theta/Delta Ratio",
+        "source":    "band_power",
+        "rationale": "Established ALS EEG biomarker; moved to secondary after REM classifier fix",
+        "direction": "+",
+    },
+    {
+        "name":      "nrem_rbp_theta",
+        "label":     "NREM Relative Theta Power",
+        "source":    "band_power",
+        "rationale": "NREM slow oscillation dominance; secondary to REM findings",
+        "direction": "+",
+    },
     {
         "name":      "ca3_ctx_coh_delta",
         "label":     "CA3-CTX Delta Coherence",
@@ -653,10 +674,10 @@ def plot_beta_signflip(all_data):
 
 def main():
     print("=" * 65)
-    print("PRE-SPECIFIED HYPOTHESIS TESTING — REVISED")
-    print("4 features × 4 timepoints = 16 primary tests")
-    print("6m excluded (pre-specified null: normalization window)")
-    print("FDR: Benjamini-Hochberg across 16 tests")
+    print("PRE-SPECIFIED HYPOTHESIS TESTING — REVISED v2")
+    print("5 REM/Wake features × 4 timepoints = 20 primary tests")
+    print("REM features added after classifier fix (v1 had NREM only)")
+    print("FDR: Benjamini-Hochberg across 20 tests")
     print("=" * 65)
     print("\nPrimary features:")
     for i, f in enumerate(PRIMARY_FEATURES, 1):
