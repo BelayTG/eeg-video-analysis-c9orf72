@@ -142,6 +142,11 @@ def run_mixed_effects(df, feature, label):
     """
     Fit: feature ~ genotype * time_months + (1|animal_id)
     Returns dict with interaction p-value and coefficients.
+
+    Also runs a sensitivity check: OLS with cluster-robust (by animal)
+    standard errors. When the mixed model's random-effect variance is
+    near zero (boundary), the cluster-robust OLS gives a more honest
+    interaction p-value and is reported alongside.
     """
     if not HAVE_SM:
         return None
@@ -157,40 +162,59 @@ def run_mixed_effects(df, feature, label):
     sub["genotype"] = (sub["group"] == "KO").astype(int)
     sub = sub.rename(columns={feature: "y"})
 
+    result_dict = {
+        "feature": feature,
+        "label": label,
+        "n_obs": len(sub),
+        "n_animals": sub["animal_id"].nunique(),
+    }
+
+    # ── Primary: mixed model with random intercept ──────────────────
     try:
-        # Mixed model with random intercept per animal
         model = smf.mixedlm("y ~ genotype * time_months", sub,
                             groups=sub["animal_id"])
-        result = model.fit(reml=True, method="lbfgs")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = model.fit(reml=True, method="lbfgs")
 
-        # Extract interaction term
-        params = result.params
-        pvalues = result.pvalues
+        params  = res.params
+        pvalues = res.pvalues
+        interaction_key = next((k for k in params.index
+                                if "genotype:time" in k), None)
 
-        interaction_key = None
-        for key in params.index:
-            if "genotype:time_months" in key or "genotype:time" in key:
-                interaction_key = key
-                break
-
-        if interaction_key is None:
-            return None
-
-        return {
-            "feature": feature,
-            "label": label,
-            "n_obs": len(sub),
-            "n_animals": sub["animal_id"].nunique(),
-            "genotype_coef": float(params.get("genotype", np.nan)),
-            "genotype_p": float(pvalues.get("genotype", np.nan)),
-            "time_coef": float(params.get("time_months", np.nan)),
-            "time_p": float(pvalues.get("time_months", np.nan)),
-            "interaction_coef": float(params[interaction_key]),
-            "interaction_p": float(pvalues[interaction_key]),
-            "converged": result.converged,
-        }
+        if interaction_key:
+            # Random effect variance (group variance)
+            re_var = float(res.cov_re.iloc[0, 0]) if res.cov_re.shape[0] > 0 else 0.0
+            result_dict.update({
+                "genotype_coef": float(params.get("genotype", np.nan)),
+                "genotype_p": float(pvalues.get("genotype", np.nan)),
+                "time_coef": float(params.get("time_months", np.nan)),
+                "time_p": float(pvalues.get("time_months", np.nan)),
+                "interaction_coef": float(params[interaction_key]),
+                "interaction_p": float(pvalues[interaction_key]),
+                "converged": bool(res.converged),
+                "re_var": re_var,
+                "re_boundary": re_var < 1e-6,   # variance collapsed to zero
+            })
     except Exception as e:
-        return {"feature": feature, "label": label, "error": str(e)}
+        result_dict["mixed_error"] = str(e)
+
+    # ── Sensitivity: OLS with cluster-robust SE (by animal) ─────────
+    try:
+        ols = smf.ols("y ~ genotype * time_months", sub).fit(
+            cov_type="cluster", cov_kwds={"groups": sub["animal_id"]})
+        ikey = next((k for k in ols.params.index if "genotype:time" in k), None)
+        if ikey:
+            result_dict["robust_interaction_coef"] = float(ols.params[ikey])
+            result_dict["robust_interaction_p"] = float(ols.pvalues[ikey])
+    except Exception as e:
+        result_dict["robust_error"] = str(e)
+
+    # Need at least one valid interaction estimate
+    if "interaction_p" not in result_dict and "robust_interaction_p" not in result_dict:
+        return None
+
+    return result_dict
 
 
 def part1_mixed_effects():
@@ -214,26 +238,34 @@ def part1_mixed_effects():
     print(f"Timepoints: {sorted(df['time_months'].unique())}")
 
     results = []
-    print(f"\n{'Feature':<28} {'Interaction β':>14} {'Interact p':>12} {'Note'}")
-    print("-" * 70)
+    print(f"\n{'Feature':<26} {'Mixed p':>10} {'Robust p':>10} {'RE var':>9} {'Note'}")
+    print("-" * 72)
     for feature, label in MIXED_FEATURES:
         if feature not in df.columns:
-            print(f"{label:<28} {'(not in data)':>14}")
+            print(f"{label:<26} {'(not in data)':>10}")
             continue
         res = run_mixed_effects(df, feature, label)
         if res is None:
-            print(f"{label:<28} {'(insufficient data)':>14}")
-            continue
-        if "error" in res:
-            print(f"{label:<28} ERROR: {res['error'][:30]}")
+            print(f"{label:<26} {'(insufficient)':>10}")
             continue
         results.append(res)
-        sig = ("***" if res["interaction_p"] < 0.001 else
-               "**"  if res["interaction_p"] < 0.01  else
-               "*"   if res["interaction_p"] < 0.05  else "ns")
-        conv = "" if res["converged"] else " [!conv]"
-        print(f"{label:<28} {res['interaction_coef']:>14.5f} "
-              f"{res['interaction_p']:>12.5f} {sig}{conv}")
+
+        mixed_p  = res.get("interaction_p", np.nan)
+        robust_p = res.get("robust_interaction_p", np.nan)
+        re_var   = res.get("re_var", np.nan)
+        # Use robust p when random effect collapsed to boundary
+        report_p = robust_p if res.get("re_boundary", False) and not np.isnan(robust_p) else mixed_p
+        res["report_p"] = report_p
+
+        sig = ("***" if report_p < 0.001 else "**" if report_p < 0.01 else
+               "*" if report_p < 0.05 else "ns")
+        note = ""
+        if res.get("re_boundary", False):
+            note = " [RE→0, using robust p]"
+        elif not res.get("converged", True):
+            note = " [!conv]"
+        print(f"{label:<26} {mixed_p:>10.5f} {robust_p:>10.5f} "
+              f"{re_var:>9.2e} {sig}{note}")
 
     if not results:
         print("\nNo models could be fit")
@@ -241,31 +273,36 @@ def part1_mixed_effects():
 
     res_df = pd.DataFrame(results)
 
-    # FDR on interaction p-values
+    # FDR on the reported interaction p-values (robust where RE collapsed)
     if len(res_df) > 1:
-        res_df["interaction_p_fdr"] = fdr_bh(res_df["interaction_p"].values).round(5)
-        res_df["interaction_fdr_sig"] = res_df["interaction_p_fdr"] < 0.05
+        res_df["report_p_fdr"] = fdr_bh(res_df["report_p"].values).round(5)
+        res_df["report_fdr_sig"] = res_df["report_p_fdr"] < 0.05
+        # Keep legacy columns for compatibility
+        res_df["interaction_p_fdr"] = res_df["report_p_fdr"]
+        res_df["interaction_fdr_sig"] = res_df["report_fdr_sig"]
 
     res_df.to_csv(os.path.join(RESULTS_DIR, "mixed_effects_results.csv"), index=False)
     print(f"\nSaved: mixed_effects_results.csv")
 
     # Summary
-    print("\n--- INTERPRETATION ---")
+    print("\n--- INTERPRETATION (reported p = robust where random effect collapsed) ---")
     for _, r in res_df.iterrows():
-        if r.get("interaction_fdr_sig", False) or r["interaction_p"] < 0.05:
-            direction = "diverge" if r["interaction_coef"] != 0 else "parallel"
-            fdr_note = f" (FDR q={r.get('interaction_p_fdr', np.nan):.4f})" if "interaction_p_fdr" in r else ""
-            print(f"  {r['label']}: trajectories {direction} over time, "
-                  f"interaction p={r['interaction_p']:.4f}{fdr_note}")
-            print(f"    → KO slope differs from WT by {r['interaction_coef']:+.4f}/month")
+        report_p = r.get("report_p", np.nan)
+        if r.get("report_fdr_sig", False) or report_p < 0.05:
+            coef = r.get("interaction_coef", r.get("robust_interaction_coef", np.nan))
+            fdr_note = f" (FDR q={r.get('report_p_fdr', np.nan):.4f})" if "report_p_fdr" in r else ""
+            method = "robust OLS" if r.get("re_boundary", False) else "mixed model"
+            print(f"  {r['label']}: trajectories diverge over time, "
+                  f"p={report_p:.4f}{fdr_note} [{method}]")
+            print(f"    → KO slope differs from WT by {coef:+.4f}/month")
 
     # Figure: trajectories with fitted lines
     plot_mixed_effects_trajectories(df, res_df)
 
 
 def plot_mixed_effects_trajectories(df, res_df):
-    feats_to_plot = [(r["feature"], r["label"], r["interaction_p"],
-                       r.get("interaction_p_fdr", np.nan))
+    feats_to_plot = [(r["feature"], r["label"], r.get("report_p", np.nan),
+                       r.get("report_p_fdr", np.nan))
                       for _, r in res_df.iterrows()]
     n = len(feats_to_plot)
     if n == 0:
