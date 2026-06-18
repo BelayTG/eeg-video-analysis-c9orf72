@@ -1,0 +1,63 @@
+def compute_epoch_features(sig, fs, epoch_s=EPOCH_S):
+    epoch_n = int(epoch_s * fs)
+    n_epochs = len(sig) // epoch_n
+    if n_epochs == 0: return pd.DataFrame()
+    rows = []
+    for i in range(n_epochs):
+        ep = sig[i*epoch_n:(i+1)*epoch_n]
+        if np.abs(ep).max() > 500: continue   # artifact
+        if np.std(ep) < 0.001:    continue   # flat
+        f, psd = welch(ep, fs=fs, nperseg=min(int(fs*2), epoch_n))
+        rows.append({
+            "epoch_idx": i,
+            "onset_s":   i * epoch_s,
+            "bp_delta":  band_power(psd, f, 0.5, 4),
+            "bp_theta":  band_power(psd, f, 4, 8),
+            "bp_alpha":  band_power(psd, f, 8, 13),
+            "bp_beta":   band_power(psd, f, 13, 30),
+            "bp_gamma":  band_power(psd, f, 30, 80),
+            "total_var": float(np.var(ep)),
+        })
+    return pd.DataFrame(rows)
+
+def classify_sleep_states(epoch_df):
+    if len(epoch_df) < 10:
+        epoch_df["state"] = "unknown"
+        return epoch_df
+
+    df = epoch_df.copy()
+
+    # Normalize within-animal (z-score)
+    for col in ["bp_delta","bp_theta","bp_alpha","bp_beta","bp_gamma","total_var"]:
+        m = df[col].mean(); s = df[col].std() + 1e-8
+        df[f"z_{col}"] = (df[col] - m) / s
+
+    # Delta/theta ratio
+    df["dt_ratio"] = df["bp_delta"] / (df["bp_theta"] + 1e-8)
+    dt_med = df["dt_ratio"].median()
+
+    # Variance for wake detection
+    var_75 = df["total_var"].quantile(0.75)
+    var_25 = df["total_var"].quantile(0.25)
+
+    states = []
+    for _, row in df.iterrows():
+        # Wake: high variance OR high beta/gamma
+        if (row["total_var"] > var_75 or
+            row["z_bp_beta"] > 1.0 or
+            row["z_bp_gamma"] > 1.0):
+            states.append("Wake")
+        # REM: low delta, high theta, low variance
+        elif (row["dt_ratio"] < dt_med * 0.5 and
+              row["z_bp_theta"] > 0 and
+              row["total_var"] < var_75):
+            states.append("REM")
+        # NREM: high delta, low theta
+        elif row["dt_ratio"] > dt_med:
+            states.append("NREM")
+        # Default to Wake for ambiguous
+        else:
+            states.append("Wake")
+
+    df["state"] = states
+    return df
