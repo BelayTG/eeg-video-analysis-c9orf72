@@ -123,16 +123,26 @@ def create_behavioral_template(animal_ids_wt, animal_ids_ko):
 
 # ── Load EEG features at specified timepoints ──────────────────────────────
 
-def load_eeg_animal_means(tp):
-    """Load animal-level mean EEG features for one timepoint."""
-    path = os.path.join(DATA_DIR, f"state_specific_features_{tp}.csv")
+def load_eeg_animal_means(tp, scenario="A"):
+    """Load animal-level mean EEG features for one timepoint (Scenario A = animal-level)."""
+    path = os.path.join(DATA_DIR, f"state_specific_features_{tp}_{scenario}.csv")
+    if not os.path.exists(path):
+        # Fallback to un-suffixed name for backward compatibility
+        alt = os.path.join(DATA_DIR, f"state_specific_features_{tp}.csv")
+        path = alt if os.path.exists(alt) else path
     if not os.path.exists(path):
         return pd.DataFrame()
     df = pd.read_csv(path)
+    df["animal_id"] = df["animal_id"].astype(str)
+    # Only numeric feature columns (exclude ids, group, timepoint, text columns)
+    exclude = {"animal_id", "session_id", "group", "timepoint", "abf_file", "notes"}
     feat_cols = [c for c in df.columns
-                 if c not in ["animal_id","session_id","group","timepoint"]
-                 and not c.endswith("_n_epochs") and not c.endswith("_std")]
-    animal_means = df.groupby(["animal_id","group"])[feat_cols].mean().reset_index()
+                 if c not in exclude
+                 and not c.endswith("_n_epochs") and not c.endswith("_std")
+                 and pd.api.types.is_numeric_dtype(df[c])]
+    if not feat_cols:
+        return pd.DataFrame()
+    animal_means = df.groupby(["animal_id", "group"])[feat_cols].mean().reset_index()
     animal_means["timepoint"] = tp
     return animal_means
 
@@ -212,36 +222,42 @@ def eeg_behavior_correlations(eeg_df, behav_df, eeg_tp_label,
 
 # ── Trajectory predictor analysis ─────────────────────────────────────────
 
-def trajectory_predictors(eeg_3m, eeg_9m, behav_df):
+def trajectory_predictors(eeg_3m, eeg_late, behav_df, label="3m→9m_delta"):
     """
-    Test whether the rate of EEG change (3m→9m) predicts 10m behavior.
+    Test whether the rate of EEG change (3m→late) predicts 10m behavior.
+    `label` names the contrast (e.g. '3m→9m_delta' or '3m→12m_delta').
     """
     common_animals = (set(eeg_3m.animal_id) &
-                      set(eeg_9m.animal_id) &
+                      set(eeg_late.animal_id) &
                       set(behav_df.animal_id))
     if len(common_animals) < 4:
-        print("  Insufficient overlap for trajectory analysis")
+        print(f"  Insufficient overlap for trajectory analysis ({label})")
         return pd.DataFrame()
 
     feat_cols = [c for c in eeg_3m.columns
                  if c not in ["animal_id","group","timepoint"]
-                 and c in eeg_9m.columns]
+                 and c in eeg_late.columns]
 
-    # Compute delta (9m - 3m)
+    # Compute delta (late - 3m)
     m3 = eeg_3m[eeg_3m.animal_id.isin(common_animals)].set_index("animal_id")
-    m9 = eeg_9m[eeg_9m.animal_id.isin(common_animals)].set_index("animal_id")
+    mL = eeg_late[eeg_late.animal_id.isin(common_animals)].set_index("animal_id")
 
-    delta = (m9[feat_cols] - m3[feat_cols]).reset_index()
+    delta = (mL[feat_cols] - m3[feat_cols]).reset_index()
     delta.columns = ["animal_id"] + [f"delta_{c}" for c in feat_cols]
     delta["group"] = m3.loc[delta.animal_id, "group"].values
 
     delta_cols = [c for c in delta.columns if c.startswith("delta_")]
     corr_df = eeg_behavior_correlations(
         delta.rename(columns={c: c for c in delta_cols}),
-        behav_df, "3m→9m_delta", delta_cols
+        behav_df, label, delta_cols
     )
-    corr_df.to_csv(os.path.join(RESULTS_DIR, "trajectory_behavior_correlations.csv"),
+    safe = label.replace("→", "_to_").replace("_delta", "")
+    corr_df.to_csv(os.path.join(RESULTS_DIR, f"trajectory_behavior_correlations_{safe}.csv"),
                    index=False)
+    # keep legacy filename for the primary 3m→9m contrast
+    if label == "3m→9m_delta":
+        corr_df.to_csv(os.path.join(RESULTS_DIR, "trajectory_behavior_correlations.csv"),
+                       index=False)
     return corr_df
 
 
@@ -284,17 +300,25 @@ def main():
 
     # Key EEG features to test
     key_eeg_feats = [
-        "wake_rbp_theta", "nrem_rbp_theta", "rem_rbp_theta",
+        # REM features — the paper's primary findings
+        "rem_rbp_theta", "rem_rbp_beta", "rem_td_ratio", "rem_theta_alpha",
+        "rem_zcr",
+        # Wake/NREM
+        "wake_rbp_theta", "nrem_rbp_theta", "wake_rbp_beta",
         "wake_td_ratio", "nrem_td_ratio",
+        # Complexity / aperiodic (pre-symptomatic predictors)
         "wake_spectral_entropy", "nrem_spectral_entropy",
-        "wake_lzc", "nrem_lzc",
-        "wake_ap_exp", "wake_hjorth_mob",
-        "wake_rbp_gamma", "wake_rbp_delta",
+        "wake_lzc", "nrem_lzc", "rem_lzc",
+        "wake_ap_exp", "ap_exp", "aperiodic_exponent",
+        "wake_hjorth_mob", "wake_rbp_gamma", "wake_rbp_delta",
+        # Spindles
+        "spindle_duration_mean",
     ]
 
-    for tp, label in [("3m", "3m_baseline"), ("9m", "9m_concurrent")]:
+    for tp, label in [("3m", "3m_baseline"), ("9m", "9m_concurrent"), ("12m", "12m_endstage")]:
         eeg = load_eeg_animal_means(tp)
         if eeg.empty:
+            print(f"  [{tp}] no EEG features found (state_specific_features_{tp}.csv) — skipping")
             continue
         eeg_feats = [c for c in key_eeg_feats if c in eeg.columns]
         corr = eeg_behavior_correlations(eeg, behav_filled, label, eeg_feats)
@@ -306,6 +330,14 @@ def main():
         traj_corr = trajectory_predictors(eeg_3m, eeg_9m, behav_filled)
         if not traj_corr.empty:
             all_corr.append(traj_corr)
+
+    # 3m→12m trajectory (pre-specified motor anchor: late-stage beta change vs grip)
+    eeg_12m = load_eeg_animal_means("12m")
+    if not eeg_3m.empty and not eeg_12m.empty:
+        traj_corr_12 = trajectory_predictors(eeg_3m, eeg_12m, behav_filled,
+                                             label="3m→12m_delta")
+        if not traj_corr_12.empty:
+            all_corr.append(traj_corr_12)
 
     # ── Save all correlations ──────────────────────────────────────────────
     if all_corr:
@@ -319,7 +351,7 @@ def main():
         sig_corrs = pd.concat(all_corr).nsmallest(6, "pval")
         _plot_scatter_grid(sig_corrs, behav_filled,
                            {tp: load_eeg_animal_means(tp)
-                            for tp in ["3m","9m"] if not load_eeg_animal_means(tp).empty})
+                            for tp in ["3m","9m","12m"] if not load_eeg_animal_means(tp).empty})
 
     print("\nBEHAVIORAL-EEG INTEGRATION COMPLETE")
 
@@ -333,7 +365,7 @@ def _plot_scatter_grid(sig_corrs, behav_df, eeg_by_tp):
     axes = axes.flat
 
     for ax, (_, row) in zip(axes, sig_corrs.head(n).iterrows()):
-        tp_key = row["eeg_timepoint"].replace("_baseline","").replace("_concurrent","")
+        tp_key = row["eeg_timepoint"].replace("_baseline","").replace("_concurrent","").replace("_endstage","")
         if tp_key not in eeg_by_tp:
             ax.set_visible(False); continue
         eeg = eeg_by_tp[tp_key]
