@@ -422,7 +422,9 @@ def part_b_staging_sensitivity():
         ax.set_title(f"{label}\nCohen's d (var pct=75)", fontsize=9)
         ax.set_xlabel("delta percentile"); ax.set_ylabel("theta percentile")
     fig.suptitle("Staging sensitivity: genotype effect across REM threshold choices\n"
-                 "Stable color/sign = finding not an artifact of one cutoff", fontsize=10)
+                 "Stable color and sign: finding is not an artifact of one cutoff",
+                 fontsize=11, y=1.10)
+    fig.subplots_adjust(top=0.78, wspace=0.35)
     fig.colorbar(im, ax=axes.tolist(), shrink=0.7, label="Cohen's d")
     fig.savefig(os.path.join(FIGURES_DIR, "staging_sensitivity_heatmap.png"),
                 dpi=300, bbox_inches="tight")

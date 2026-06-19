@@ -265,14 +265,15 @@ def part1_full_matrix():
                         star = "*" if (len(cell) and cell["fdr_sig"].values[0]) else ""
                         ax.text(j, i, f"{grid[i,j]:.2f}{star}", ha="center", va="center",
                                 fontsize=8, color="black")
-            ax.set_title(f"Cortical REM PAC, {tp}\n(Cohen's d, KO−WT)", fontsize=9)
+            ax.set_title(f"Cortical REM PAC, {tp}\n(Cohen's d, KO-WT)", fontsize=9)
             ax.set_xlabel("Amplitude band", fontsize=8)
             if ax is axes[0]:
                 ax.set_ylabel("Phase band", fontsize=8)
         fig.colorbar(im, ax=axes.tolist(), shrink=0.7, label="Cohen's d")
-        fig.suptitle("Full phase-amplitude coupling matrix — cortical (S1/PtA), REM\n"
+        fig.suptitle("Full phase-amplitude coupling matrix: cortical (S1/PtA), REM\n"
                      "Uniform near-zero values support a frequency-general PAC null",
-                     fontsize=10)
+                     fontsize=11, y=1.08)
+        fig.subplots_adjust(top=0.80, wspace=0.35)
         fig.savefig(os.path.join(FIGURES_DIR, "pac_full_comodulogram_matrix.png"),
                     dpi=300, bbox_inches="tight")
         plt.close()
