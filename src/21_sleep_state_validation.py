@@ -430,24 +430,37 @@ def main():
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
         fig, axes = plt.subplots(1, 2, figsize=(11, 4.6), dpi=200)
-        # (left) motion by state - box/strip
-        order = ["Wake", "NREM", "REM"]
-        colors = {"Wake": "#9AA0A6", "NREM": "#4C72B0", "REM": "#C44E52"}
-        data = [mv[mv.state == s]["motion"].values for s in order]
+        # (left) motion by state, with wake split into quiet vs active
+        order = ["Quiet wake", "Active wake", "NREM", "REM"]
+        colors = {"Quiet wake": "#C7CBD1", "Active wake": "#6E7480", "NREM": "#4C72B0", "REM": "#C44E52"}
+        wk = mv[mv.state == "Wake"]["motion"]
+        athr = np.percentile(wk, 75) if len(wk) else np.inf
+        data_map = {
+            "Quiet wake":  wk[wk < athr].values,
+            "Active wake": wk[wk >= athr].values,
+            "NREM":        mv[mv.state == "NREM"]["motion"].values,
+            "REM":         mv[mv.state == "REM"]["motion"].values,
+        }
+        data = [data_map[s] for s in order]
         try:
             bp = axes[0].boxplot(data, tick_labels=order, patch_artist=True, showfliers=False)
         except TypeError:
             bp = axes[0].boxplot(data, labels=order, patch_artist=True, showfliers=False)
         for patch, s in zip(bp["boxes"], order):
-            patch.set_facecolor(colors[s]); patch.set_alpha(0.7)
+            patch.set_facecolor(colors[s]); patch.set_alpha(0.75)
         axes[0].set_ylabel("Video motion energy (EMG surrogate)")
-        axes[0].set_title("Movement by vigilance state\nREM \u2248 NREM (immobile) \u226a Wake")
-        # (right) CA3 theta/delta vs cortical dt_ratio coloured by motion
-        sc = axes[1].scatter(mv["dt_ratio"], mv["td_ca3"], c=mv["motion"], s=7, cmap="viridis",
-                             alpha=0.5, vmin=np.percentile(mv.motion, 5), vmax=np.percentile(mv.motion, 95))
-        plt.colorbar(sc, ax=axes[1], label="Motion energy")
-        axes[1].set_xlabel("Cortical delta/theta ratio"); axes[1].set_ylabel("CA3 theta/delta")
-        axes[1].set_title("REM cluster: high CA3 theta, low motion")
+        axes[0].set_title("Movement by vigilance state\nREM immobile; far below active wake")
+        axes[0].tick_params(axis="x", labelrotation=15)
+        # (right) CA3 theta/delta by state (clean; immune to delta/theta outliers)
+        ca3_data = [df[df.state == s]["td_ca3"].dropna().values for s in ["Wake", "NREM", "REM"]]
+        try:
+            bp2 = axes[1].boxplot(ca3_data, tick_labels=["Wake", "NREM", "REM"], patch_artist=True, showfliers=False)
+        except TypeError:
+            bp2 = axes[1].boxplot(ca3_data, labels=["Wake", "NREM", "REM"], patch_artist=True, showfliers=False)
+        for patch, s in zip(bp2["boxes"], ["Wake", "NREM", "REM"]):
+            patch.set_facecolor({"Wake": "#9AA0A6", "NREM": "#4C72B0", "REM": "#C44E52"}[s]); patch.set_alpha(0.75)
+        axes[1].set_ylabel("CA3 theta/delta ratio")
+        axes[1].set_title("Hippocampal theta greatest in REM\n(~6.3 Hz peak)")
         fig.tight_layout()
         out = os.path.join(FIG_DIR, "sleep_state_validation_motion.png")
         fig.savefig(out, dpi=200, bbox_inches="tight"); print(f"\nSaved {out}")
