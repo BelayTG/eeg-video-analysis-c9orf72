@@ -63,7 +63,7 @@ Two-channel EEG was recorded from a hippocampal (CA3) electrode and a parietal s
 
 ### Sleep-state classification
 
-Each 4-second epoch was classified as wake, NREM, or REM using relative band-power criteria. Wake was defined by high signal variance or elevated fast-frequency (beta/gamma) activity; REM by theta-dominant, low-delta, low-amplitude activity (relative theta above the median, relative delta below the median, total variance below the 75th percentile); NREM by delta-dominant activity. The approach was applied identically to all recordings and yielded biologically plausible state distributions (REM [20–32]% of epochs per recording). We note that classification was based on EEG features rather than concurrent electromyography, a limitation considered in the Discussion. State percentages were computed per recording, and epoch-level labels were retained for state-specific spectral analysis and for analysis of state-transition dynamics.
+Each 4-second epoch was classified as wake, NREM, or REM using relative band-power criteria. Wake was defined by high signal variance or elevated fast-frequency (beta/gamma) activity; REM by theta-dominant, low-delta, low-amplitude activity (relative theta above the median, relative delta below the median, total variance below the 75th percentile); NREM by delta-dominant activity. The approach was applied identically to all recordings and yielded biologically plausible state distributions (REM 7–12% of total recording time, ~20–29% of sleep). We note that classification was based on EEG features rather than concurrent electromyography, a limitation considered in the Discussion. State percentages were computed per recording, and epoch-level labels were retained for state-specific spectral analysis and for analysis of state-transition dynamics.
 
 ### Spectral and signal features
 
@@ -105,7 +105,7 @@ Analysis code is available at https://github.com/BelayTG/eeg-video-analysis-c9or
 
 ### A longitudinal, state-resolved EEG dataset across the C9orf72 disease course
 
-We recorded two-channel EEG with synchronous video from C9orf72-knockout mice and wild-type littermates at six timepoints spanning pre-symptomatic, acute-challenge, and progressive disease stages (Fig. 1). Epoch-level vigilance-state classification yielded biologically plausible distributions, with REM sleep representing [20–32]% of epochs per recording, enabling state-resolved spectral analysis throughout the disease course and supporting both per-timepoint comparison and the modelling of within-animal trajectories.
+We recorded two-channel EEG with synchronous video from C9orf72-knockout mice and wild-type littermates at six timepoints spanning pre-symptomatic, acute-challenge, and progressive disease stages (Fig. 1). Epoch-level vigilance-state classification yielded biologically plausible distributions, with REM sleep representing 7–12% of total recording time (~20–29% of sleep), enabling state-resolved spectral analysis throughout the disease course and supporting both per-timepoint comparison and the modelling of within-animal trajectories.
 
 ### A biphasic reversal of beta-band network activity is the central longitudinal finding
 
