@@ -473,6 +473,8 @@ def plot_pac_trajectory(all_dfs, stat_df, state, channel="ctx"):
         feat = f"{channel}_{state_lower}_{band_key}"
         is_primary = (state == "REM" and channel == "ctx" and band_key == "T_HG")
 
+        tp_top = {}   # highest (mean+sem) across groups, per timepoint x-position
+
         for group, color in COLORS.items():
             xs, means, sems = [], [], []
             for tp, tp_x in zip(TP_ORDER, TP_X):
@@ -486,35 +488,46 @@ def plot_pac_trajectory(all_dfs, stat_df, state, channel="ctx"):
                 if len(vals) == 0:
                     continue
                 xs.append(tp_x); means.append(vals.mean()); sems.append(vals.sem())
+                tp_top[tp_x] = max(tp_top.get(tp_x, -np.inf), vals.max())
                 ax.scatter([tp_x]*len(vals), vals,
                             color=color, s=25, alpha=0.4, zorder=3)
-            if xs:
-                ax.fill_between(xs,
-                                 np.array(means)-np.array(sems),
-                                 np.array(means)+np.array(sems),
-                                 color=color, alpha=0.15)
-                ax.plot(xs, means, "-o", color=color, lw=2.5,
-                         markersize=8, label=group, zorder=4)
 
-        # Significance markers from stats
+        # Significance markers from stats, positioned above each timepoint's top data point
         if len(stat_df) > 0 and "feature" in stat_df.columns:
+            y0, y1 = ax.get_ylim()
+            yspan = (y1 - y0) if y1 > y0 else 1e-3
+            top_label_y = y1
             for tp, tp_x in zip(TP_ORDER, TP_X):
                 sub = stat_df[(stat_df.feature==feat) & (stat_df.timepoint==tp)]
                 if len(sub) == 0:
                     continue
                 r = sub.iloc[0]
-                ymax = ax.get_ylim()[1] if ax.get_ylim()[1] != 0 else 1e-3
+                pv = float(r.pval)
                 if r.get("fdr_sig", False):
-                    ax.text(tp_x, ymax*0.97, "***", ha="center",
-                             fontsize=11, color="darkred", weight="bold")
+                    star, col = "**", "darkred"
                 elif r.ci_excludes_zero:
-                    ax.text(tp_x, ymax*0.97, "◄", ha="center",
-                             fontsize=10, color="#D85A30")
-                elif r.pval < 0.05:
-                    ax.text(tp_x, ymax*0.97, "†", ha="center",
-                             fontsize=10, color="gray")
+                    star, col = "*", "#D85A30"
+                elif pv < 0.05:
+                    star, col = "*", "gray"
+                else:
+                    star, col = "ns", "gray"
+                ptxt = "p<0.001" if pv < 0.001 else f"p={pv:.3f}"
+
+                y_data = tp_top.get(tp_x, y0 + yspan * 0.45)
+                y_ptxt = y_data + yspan * 0.05   # p-value text just above top point
+                y_star = y_ptxt + yspan * 0.05   # star above the p-value
+                top_label_y = max(top_label_y, y_star + yspan * 0.06)
+
+                ax.text(tp_x, y_ptxt, ptxt, ha="center", va="bottom",
+                        fontsize=6, color=col)
+                ax.text(tp_x, y_star, star, ha="center", va="bottom",
+                        fontsize=10, color=col, weight="bold")
+            # expand y-axis so the tallest label sits inside the frame
+            ax.set_ylim(y0, max(y1, top_label_y))
 
         ax.set_xticks(TP_X); ax.set_xticklabels(TP_ORDER, fontsize=9)
+        xpad = (max(TP_X) - min(TP_X)) * 0.08
+        ax.set_xlim(min(TP_X) - xpad, max(TP_X) + xpad)
         ax.set_xlabel("Age (months)", fontsize=10)
         ax.set_ylabel("Modulation Index", fontsize=10)
         title = f"{band_info['label']}"
@@ -561,6 +574,7 @@ def plot_replication_summary(all_dfs, stat_df):
 
     for ax, (ch, state, is_primary, title) in zip(axes.flat, panel_configs):
         feat = f"{ch}_{state.lower()}_{band_key}"
+        tp_top = {}   # highest (mean+sem) across groups, per timepoint x-position
 
         for group, color in COLORS.items():
             xs, means, sems = [], [], []
@@ -575,6 +589,7 @@ def plot_replication_summary(all_dfs, stat_df):
                 if len(vals) == 0:
                     continue
                 xs.append(tp_x); means.append(vals.mean()); sems.append(vals.sem())
+                tp_top[tp_x] = max(tp_top.get(tp_x, -np.inf), vals.max())
                 ax.scatter([tp_x]*len(vals), vals,
                             color=color, s=20, alpha=0.35, zorder=3)
             if xs:
@@ -585,25 +600,42 @@ def plot_replication_summary(all_dfs, stat_df):
                 ax.plot(xs, means, "-o", color=color, lw=2,
                          markersize=7, label=group, zorder=4)
 
-        # Stats markers
+        # Significance markers from stats, positioned above each timepoint's data
         if len(stat_df) > 0 and "feature" in stat_df.columns:
+            y0, y1 = ax.get_ylim()
+            yspan = (y1 - y0) if y1 > y0 else 1e-3
+            top_label_y = y1
             for tp, tp_x in zip(TP_ORDER, TP_X):
                 sub = stat_df[(stat_df.feature==feat) & (stat_df.timepoint==tp)]
                 if len(sub) == 0:
                     continue
                 r = sub.iloc[0]
-                ymax = ax.get_ylim()[1] if ax.get_ylim()[1] != 0 else 1e-3
+                pv = float(r.pval)
                 if r.get("fdr_sig", False):
-                    ax.text(tp_x, ymax*0.97, "***", ha="center",
-                             fontsize=10, color="darkred", weight="bold")
+                    star, col = "**", "darkred"
                 elif r.ci_excludes_zero:
-                    ax.text(tp_x, ymax*0.97, "◄", ha="center",
-                             fontsize=9, color="#D85A30")
-                elif r.pval < 0.05:
-                    ax.text(tp_x, ymax*0.97, "†", ha="center",
-                             fontsize=9, color="gray")
+                    star, col = "*", "#D85A30"
+                elif pv < 0.05:
+                    star, col = "*", "gray"
+                else:
+                    star, col = "ns", "gray"
+                ptxt = "p<0.001" if pv < 0.001 else f"p={pv:.3f}"
+
+                y_data = tp_top.get(tp_x, y0 + yspan * 0.5)
+                y_lab  = y_data + yspan * 0.05
+                y_ptxt = y_lab  + yspan * 0.045
+                top_label_y = max(top_label_y, y_ptxt + yspan * 0.04)
+
+                ax.text(tp_x, y_lab, star, ha="center", va="bottom",
+                        fontsize=10, color=col, weight="bold")
+                ax.text(tp_x, y_ptxt, ptxt, ha="center", va="bottom",
+                        fontsize=6, color=col)
+            if top_label_y > y1:
+                ax.set_ylim(y0, top_label_y)
 
         ax.set_xticks(TP_X); ax.set_xticklabels(TP_ORDER, fontsize=8)
+        xpad = (max(TP_X) - min(TP_X)) * 0.08
+        ax.set_xlim(min(TP_X) - xpad, max(TP_X) + xpad)
         ax.set_xlabel("Age (months)", fontsize=9)
         ax.set_ylabel("MI (theta-high gamma PAC)", fontsize=9)
         ax.set_title(title, fontsize=9,

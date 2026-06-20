@@ -224,7 +224,23 @@ def plot_trajectory(animal_df, feat, title, ylabel, fname, log_scale=False):
     if log_scale:
         ax.set_yscale("log")
 
-    # Add significance markers
+    # Add significance markers, positioned just above each timepoint's data
+    def _sig_label(p):
+        if p < 0.001: return "***", "p<0.001"
+        if p < 0.01:  return "**",  f"p={p:.3f}"
+        if p < 0.05:  return "*",   f"p={p:.3f}"
+        return "ns", f"p={p:.2f}"
+
+    def _err_top(v):
+        # top of the error bar = mean + SEM (matches the errorbar drawn on the plot)
+        m = v.mean()
+        sem = v.std(ddof=1) / max(len(v) ** 0.5, 1)
+        return m + sem
+
+    y0, y1 = ax.get_ylim()
+    yspan = y1 - y0
+    top_label_y = y1
+
     for tp, tp_x in zip(TP_ORDER, TP_X):
         sub = animal_df[animal_df.timepoint == tp]
         wt  = sub[sub.group == "WT"][feat].dropna()
@@ -232,17 +248,29 @@ def plot_trajectory(animal_df, feat, title, ylabel, fname, log_scale=False):
         if len(wt) < 2 or len(ko) < 2:
             continue
         _, p = mannwhitneyu(wt, ko, alternative="two-sided")
-        if p < 0.05:
-            ymax = ax.get_ylim()[1]
-            sig  = "***" if p < 0.001 else "**" if p < 0.01 else "*"
-            ax.text(tp_x, ymax * 0.97, sig, ha="center",
-                    fontsize=10, color="red", weight="bold")
+        star, ptxt = _sig_label(p)
+        is_sig = p < 0.05
+        col = "red" if is_sig else "gray"
+
+        # local ceiling: higher group's mean + SEM at THIS timepoint
+        y_data = max(_err_top(wt), _err_top(ko))
+        y_lab  = y_data + yspan * 0.05          # star sits just above the error bar
+        y_ptxt = y_lab  + yspan * 0.045         # p-value sits above the star
+        top_label_y = max(top_label_y, y_ptxt + yspan * 0.04)
+
+        ax.text(tp_x, y_lab, star, ha="center", va="bottom",
+                fontsize=10, color=col, weight="bold" if is_sig else "normal")
+        ax.text(tp_x, y_ptxt, ptxt, ha="center", va="bottom",
+                fontsize=6.5, color=col)
+
+    # expand the top only if the tallest label needs the room
+    if top_label_y > y1:
+        ax.set_ylim(y0, top_label_y)
 
     plt.tight_layout()
     fig.savefig(os.path.join(FIGURES_DIR, fname), dpi=300, bbox_inches="tight")
     plt.close()
     print(f"  Saved: {fname}")
-
 
 def plot_effect_size_heatmap(traj_df, top_n=20, suffix=""):
     """

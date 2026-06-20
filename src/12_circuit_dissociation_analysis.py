@@ -652,24 +652,46 @@ def plot_dsi_trajectory(traj_df, stats_df):
             ax.errorbar(xs, means, yerr=sems, fmt="none",
                          color=color, capsize=5, capthick=2)
 
-    # Significance markers
+    # Significance markers, positioned above each timepoint's top data point
     if len(stats_df) > 0 and "feature" in stats_df.columns:
+        # build per-timepoint data ceiling from the DSI values actually plotted
+        tp_top = {}
+        for tp, tp_x in zip(TP_ORDER, TP_X):
+            vals_tp = traj_df[traj_df.timepoint==tp][dsi_col].dropna()
+            if len(vals_tp):
+                tp_top[tp_x] = vals_tp.max()
+
         ko_wt = stats_df[(stats_df.analysis=="KO_vs_WT") &
                           (stats_df.feature==dsi_col)]
+        y0, y1 = ax.get_ylim()
+        yspan = (y1 - y0) if y1 > y0 else 1e-3
+        top_label_y = y1
         for _, r in ko_wt.iterrows():
             if r.timepoint not in TP_ORDER:
                 continue
             tp_x = TP_X[TP_ORDER.index(r.timepoint)]
+            pv = float(r.pval)
             if r.get("fdr_sig", False):
-                ax.text(tp_x, ax.get_ylim()[1]*0.97, "***",
-                         ha="center", fontsize=11, color="darkred", weight="bold")
+                star, col = "**", "darkred"
             elif r.ci_excludes_zero:
-                ax.text(tp_x, ax.get_ylim()[1]*0.97, "◄",
-                         ha="center", fontsize=10, color="#D85A30")
-            elif r.pval < 0.05:
-                ax.text(tp_x, ax.get_ylim()[1]*0.97, "†",
-                         ha="center", fontsize=10, color="gray")
+                star, col = "*", "#D85A30"
+            elif pv < 0.05:
+                star, col = "*", "gray"
+            else:
+                star, col = "ns", "gray"
+            ptxt = "p<0.001" if pv < 0.001 else f"p={pv:.3f}"
+            y_data = tp_top.get(tp_x, y0 + yspan * 0.45)
+            y_ptxt = y_data + yspan * 0.05
+            y_star = y_ptxt + yspan * 0.05
+            top_label_y = max(top_label_y, y_star + yspan * 0.06)
+            ax.text(tp_x, y_ptxt, ptxt, ha="center", va="bottom",
+                    fontsize=6, color=col)
+            ax.text(tp_x, y_star, star, ha="center", va="bottom",
+                    fontsize=11, color=col, weight="bold")
+        ax.set_ylim(y0, max(y1, top_label_y))
 
+    xpad = (max(TP_X) - min(TP_X)) * 0.10
+    ax.set_xlim(min(TP_X) - xpad, max(TP_X) + xpad)
     ax.set_xticks(TP_X)
     ax.set_xticklabels(TP_ORDER, fontsize=10)
     ax.set_xlabel("Age (months)", fontsize=11)

@@ -636,6 +636,7 @@ def plot_portfolio_trajectories(all_dfs, stats_df):
         axes = [axes]
 
     for ax, (feat, ylabel) in zip(axes, key_feats):
+        tp_top = {}   # highest data point across groups, per timepoint x-position
         for group, color in COLORS.items():
             xs, means, sems = [], [], []
             for tp, tp_x in zip(TP_ORDER, TP_X):
@@ -648,6 +649,7 @@ def plot_portfolio_trajectories(all_dfs, stats_df):
                 xs.append(tp_x)
                 means.append(vals.mean())
                 sems.append(vals.sem())
+                tp_top[tp_x] = max(tp_top.get(tp_x, -np.inf), vals.max())
                 ax.scatter([tp_x]*len(vals), vals,
                             color=color, s=20, alpha=0.4, zorder=3)
 
@@ -658,23 +660,38 @@ def plot_portfolio_trajectories(all_dfs, stats_df):
                 ax.plot(xs, means, "-o", color=color, lw=2,
                          markersize=7, label=group, zorder=4)
 
-        # Mark significant timepoints
+        # Significance markers, positioned above each timepoint's top data point
         if len(stats_df) > 0 and "feature" in stats_df.columns:
+            y0, y1 = ax.get_ylim()
+            yspan = (y1 - y0) if y1 > y0 else 1e-3
+            top_label_y = y1
             for tp, tp_x in zip(TP_ORDER, TP_X):
                 sub = stats_df[(stats_df.feature==feat) & (stats_df.timepoint==tp)]
                 if len(sub) == 0:
                     continue
                 r = sub.iloc[0]
+                pv = float(r.pval)
                 if r.get("fdr_sig", False):
-                    ax.text(tp_x, ax.get_ylim()[1]*0.97, "***",
-                             ha="center", fontsize=9, color="darkred", weight="bold")
+                    star, col = "**", "darkred"
                 elif r.ci_excludes_zero:
-                    ax.text(tp_x, ax.get_ylim()[1]*0.97, "◄",
-                             ha="center", fontsize=9, color="#D85A30")
-                elif r.pval < 0.05:
-                    ax.text(tp_x, ax.get_ylim()[1]*0.97, "†",
-                             ha="center", fontsize=9, color="gray")
+                    star, col = "*", "#D85A30"
+                elif pv < 0.05:
+                    star, col = "*", "gray"
+                else:
+                    star, col = "ns", "gray"
+                ptxt = "p<0.001" if pv < 0.001 else f"p={pv:.3f}"
+                y_data = tp_top.get(tp_x, y0 + yspan * 0.45)
+                y_ptxt = y_data + yspan * 0.05
+                y_star = y_ptxt + yspan * 0.05
+                top_label_y = max(top_label_y, y_star + yspan * 0.06)
+                ax.text(tp_x, y_ptxt, ptxt, ha="center", va="bottom",
+                        fontsize=6, color=col)
+                ax.text(tp_x, y_star, star, ha="center", va="bottom",
+                        fontsize=9, color=col, weight="bold")
+            ax.set_ylim(y0, max(y1, top_label_y))
 
+        xpad = (max(TP_X) - min(TP_X)) * 0.10
+        ax.set_xlim(min(TP_X) - xpad, max(TP_X) + xpad)
         ax.set_xticks(TP_X)
         ax.set_xticklabels(TP_ORDER, fontsize=8)
         ax.set_ylabel(ylabel, fontsize=9)
