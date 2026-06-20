@@ -215,7 +215,7 @@ const SUPP_START = c.length;   // boundary: everything from here is supplementar
 c.push(h1("Supplementary Materials"));
 c.push(para("Supplementary Methods. Expanded description of the sleep-state classification thresholds and the threshold-grid sensitivity procedure; the Tort modulation-index computation (phase and amplitude band definitions, bin count, surrogate normalization); the bias-corrected bootstrap confidence-interval procedure; the mixed-effects model specification and the cluster-robust sensitivity analysis; and the cross-validation and label-permutation procedures used for classification analysis."));
 const SUPP=[
-["Table S1. Session-level sensitivity analysis (Scenario B).","Full feature-by-timepoint comparisons treating each recording session as the unit of analysis, with group means, Cohen\u2019s d and 95% confidence intervals, and raw and FDR-adjusted p-values."],
+["Table S1. Session-level sensitivity analysis (Scenario B).","Headline feature comparisons treating each recording session as the unit of analysis, with group means, Cohen\u2019s d, and raw and FDR-adjusted p-values."],
 ["Table S2. Mixed-effects models.","Complete genotype \u00D7 time interaction results for all tested features, reporting the mixed-model p-value, the cluster-robust (by animal) p-value, the random-effect variance estimate, and the reported value (robust where the random-effect variance approached the boundary)."],
 ["Table S3. Sleep-state transition statistics.","Full transition-probability, dwell-time, and transition-rate comparisons between genotypes at every timepoint, with effect sizes and FDR-adjusted p-values."],
 ["Table S4. Secondary timepoint analyses (6 and 7 months).","Exploratory feature comparisons at the timepoints not included in the pre-specified primary analysis."],
@@ -227,8 +227,31 @@ SUPP.forEach(([t,b])=>c.push(rich([new TextRun({text:t+" ",bold:true}),new TextR
 // ===== Actual supplementary tables =====
 c.push(h1("Supplementary Tables"));
 
-c.push(tcap("Table S1. Session-level sensitivity analysis (Scenario B). [To be inserted from results CSV.]"));
-c.push(ph("Awaiting the session-level results CSV (feature \u00D7 timepoint, treating each recording session as the unit) to populate this table with exact group means, Cohen\u2019s d [95% CI], and raw/FDR p-values."));
+c.push(tcap("Table S1. Session-level sensitivity analysis (Scenario B)."));
+c.push(makeTable(
+  ["Timepoint","Feature","WT mean","KO mean","Cohen's d","p","FDR q"],
+  [
+    ["3m","REM relative beta","0.151","0.141","\u22120.18","0.438","0.788"],
+    ["3m","REM theta/delta ratio","1.542","1.509","\u22120.04","0.420","0.777"],
+    ["3m","REM relative theta","0.318","0.347","+0.66","0.035","0.186"],
+    ["3m","Wake relative beta","0.138","0.117","\u22120.37","0.319","0.651"],
+    ["4m","REM relative beta","0.108","0.159","+1.19","0.003","0.175"],
+    ["4m","REM theta/delta ratio","0.784","1.415","+1.84","0.007","0.175"],
+    ["4m","REM relative theta","0.244","0.309","+1.40","0.028","0.313"],
+    ["4m","Wake relative beta","0.091","0.166","+1.18","0.005","0.175"],
+    ["6m","REM relative beta","0.122","0.132","+0.26","0.250","0.772"],
+    ["6m","REM relative theta","0.331","0.329","\u22120.06","0.955","0.995"],
+    ["7m","REM relative beta","0.132","0.128","\u22120.10","0.659","0.951"],
+    ["7m","REM relative theta","0.351","0.343","\u22120.13","0.296","0.780"],
+    ["9m","REM relative theta","0.351","0.394","+1.65","0.002","0.247"],
+    ["9m","REM theta/delta ratio","1.536","1.760","+0.51","0.167","1.000"],
+    ["12m","REM relative beta","0.159","0.135","\u22121.55","0.007","0.233"],
+    ["12m","Wake relative beta","0.152","0.122","\u22121.51","0.007","0.233"],
+    ["12m","REM relative theta","0.352","0.379","+0.60","0.442","0.976"]
+  ],
+  [1100,2400,1100,1100,1200,1000,1000]
+));
+c.push(para("Headline features at each timepoint with each recording session treated as the unit of analysis (Scenario B), rather than averaging to one value per animal (Scenario A, the primary analysis). Group means, Cohen's d, and raw and Benjamini-Hochberg FDR-adjusted p-values are shown. The acute (4-month) and end-stage (12-month) beta and theta effects that define the primary analysis reproduce in direction and magnitude under session-level inference, and the 4-month theta/delta and 9-month relative-theta effects likewise persist, indicating the headline findings are not artifacts of the animal-level averaging. Per-timepoint sample sizes (sessions per group) were 18/18 (3m), 8/8 (4m), 16/16 (6m), 16/12 (7m), 9/8 (9m), and 8/8 (12m). Full feature-by-timepoint tables for all measures are available in the results files (statistics_[tp]_B.csv)."));
 
 c.push(tcap("Table S2. Mixed-effects genotype \u00D7 time interaction (all tested features)."));
 c.push(makeTable(
@@ -272,8 +295,24 @@ c.push(makeTable(
 ));
 c.push(para("Probability of transitioning from each row (current) state to each column (next) state, by genotype at 3, 4, and 12 months (rows sum to 1). The end-stage increase in the knockout NREM\u2192REM probability and REM\u2192NREM probability, with reduced REM self-maintenance, corresponds to the destabilization of sleep-state architecture described in the Results; full dwell-time and transition-rate comparisons with effect sizes and FDR-adjusted p-values are provided in the source results file."));
 
-c.push(tcap("Table S4. Secondary timepoint analyses (6 and 7 months). [To be inserted from results CSV.]"));
-c.push(ph("Awaiting the secondary-timepoint results CSV (6- and 7-month feature comparisons) to populate exact values."));
+c.push(tcap("Table S4. Secondary timepoint analyses (6 and 7 months)."));
+c.push(makeTable(
+  ["Timepoint","Feature","WT mean","KO mean","Cohen's d","p","FDR q"],
+  [
+    ["6m","REM relative beta","0.122","0.132","+0.25","0.505","0.986"],
+    ["6m","REM theta/delta ratio","1.379","1.330","\u22120.09","0.645","0.986"],
+    ["6m","REM relative theta","0.331","0.328","\u22120.09","0.798","0.986"],
+    ["6m","Wake relative beta","0.111","0.110","\u22120.03","0.959","0.999"],
+    ["6m","REM aperiodic exponent","1.689","1.595","\u22120.30","0.798","0.986"],
+    ["7m","REM relative beta","0.131","0.128","\u22120.10","0.950","1.000"],
+    ["7m","REM theta/delta ratio","1.547","1.476","\u22120.12","1.000","1.000"],
+    ["7m","REM relative theta","0.351","0.342","\u22120.13","0.662","1.000"],
+    ["7m","Wake relative beta","0.129","0.120","\u22120.25","0.755","1.000"],
+    ["7m","REM aperiodic exponent","1.631","1.582","\u22120.17","0.852","1.000"]
+  ],
+  [1100,2400,1100,1100,1200,1000,1000]
+));
+c.push(para("Headline features at the two intermediate timepoints (6 and 7 months) that fall between the acute challenge and the progressive and end-stage windows, at the animal level (Scenario A). No headline feature differed significantly between genotypes at either timepoint after FDR correction. This is consistent with the biphasic trajectory described in the Results, in which the acute (4-month) elevation has resolved and the end-stage (12-month) reversal has not yet developed, leaving 6 and 7 months as a relatively quiescent interval for these measures. Per-group sample sizes were 8/8 (6m) and 8/6 (7m). Full feature tables are available in the results files (statistics_6m_A.csv, statistics_7m_A.csv)."));
 
 c.push(tcap("Table S5. Cross-validated classification performance."));
 c.push(makeTable(
